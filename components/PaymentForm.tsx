@@ -2,6 +2,7 @@
 import { sendStkPush } from "@/actions/stkPush";
 import { stkPushQuery } from "@/actions/stkPushQuery";
 import { useState } from "react";
+import Snackbar from "./Snackbar";
 import STKPushQueryLoading from "./StkQueryLoading";
 import PaymentSuccess from "./Success";
 
@@ -9,6 +10,12 @@ interface dataFromForm {
   mpesa_phone: string;
   name: string;
   amount: number | null;
+}
+
+interface SnackbarState {
+  show: boolean;
+  message: string;
+  type: "success" | "error";
 }
 
 function PaymentForm() {
@@ -20,46 +27,77 @@ function PaymentForm() {
   const [loading, setLoading] = useState<boolean>(false);
   const [success, setSuccess] = useState<boolean>(false);
   const [stkQueryLoading, setStkQueryLoading] = useState<boolean>(false);
+  const [snackbar, setSnackbar] = useState<SnackbarState>({
+    show: false,
+    message: "",
+    type: "success",
+  });
 
-  //add this just before the handleSubmit Function
-  var reqcount = 0;
+  const showSnackbar = (message: string, type: "success" | "error") => {
+    setSnackbar({ show: true, message, type });
+  };
+
+  const hideSnackbar = () => {
+    setSnackbar((prev) => ({ ...prev, show: false }));
+  };
 
   const stkPushQueryWithIntervals = (CheckoutRequestID: string) => {
-    const timer = setInterval(async () => {
-      reqcount += 1;
+    let retryCount = 0;
+    const maxRetries = 20;
+    const interval = 3000;
 
-      if (reqcount === 15) {
-        //handle long payment
+    const timer = setInterval(async () => {
+      retryCount += 1;
+
+      if (retryCount === maxRetries) {
         clearInterval(timer);
         setStkQueryLoading(false);
         setLoading(false);
-        alert("You took too long to pay");
+        showSnackbar("Payment request timed out. Please try again.", "error");
+        return;
       }
 
-      const { data, error } = await stkPushQuery(CheckoutRequestID);
+      try {
+        const { data, error } = await stkPushQuery(CheckoutRequestID);
 
-      if (error) {
-        if (error.response.data.errorCode !== "500.001.1001") {
-          setStkQueryLoading(false);
-          setLoading(false);
-          alert(error?.response?.data?.errorMessage);
-        }
-      }
-
-      if (data) {
-        if (data.ResultCode === "0") {
+        if (error) {
+          if (error.response?.data?.errorCode === "500.001.1001") {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            return;
+          }
           clearInterval(timer);
           setStkQueryLoading(false);
           setLoading(false);
-          setSuccess(true);
-        } else {
-          clearInterval(timer);
-          setStkQueryLoading(false);
-          setLoading(false);
-          alert(data?.ResultDesc);
+          showSnackbar(
+            error?.response?.data?.errorMessage ||
+              "An error occurred while checking payment status",
+            "error"
+          );
+          return;
         }
+
+        if (data) {
+          if (data.ResultCode === "0") {
+            clearInterval(timer);
+            setStkQueryLoading(false);
+            setLoading(false);
+            setSuccess(true);
+            showSnackbar("Payment successful!", "success");
+          } else {
+            clearInterval(timer);
+            setStkQueryLoading(false);
+            setLoading(false);
+            showSnackbar(
+              data?.ResultDesc || "Payment failed. Please try again.",
+              "error"
+            );
+          }
+        }
+      } catch (err) {
+        console.error("Error checking payment status:", err);
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
-    }, 2000);
+    }, interval);
   };
 
   const handleSubmit = async () => {
@@ -71,25 +109,24 @@ function PaymentForm() {
       amount: dataFromForm.amount!,
     };
 
-    //validate as you wish - we just just validate the phone number for now to allow any mpesa number format
-
     const kenyanPhoneNumberRegex =
       /^(07\d{8}|01\d{8}|2547\d{8}|2541\d{8}|\+2547\d{8}|\+2541\d{8})$/;
 
     if (!kenyanPhoneNumberRegex.test(formData.mpesa_number)) {
       setLoading(false);
-      return alert("Invalid mpesa number");
+      showSnackbar("Invalid mpesa number", "error");
+      return;
     }
 
     const { data: stkData, error: stkError } = await sendStkPush(formData);
 
     if (stkError) {
       setLoading(false);
-      return alert(stkError);
+      showSnackbar(stkError, "error");
+      return;
     }
 
     const checkoutRequestId = stkData.CheckoutRequestID;
-
     setStkQueryLoading(true);
     stkPushQueryWithIntervals(checkoutRequestId);
   };
@@ -105,7 +142,8 @@ function PaymentForm() {
           <div className="overflow-hidden rounded-md bg-white">
             <div className="p-6 sm:p-10">
               <p className="mt-4 text-base text-gray-600">
-                Enter your name, mpesa number and amount to process and test this MPESA API Sandbox Project.
+                Enter your name, mpesa number and amount to process and test
+                this MPESA API Sandbox Project.
               </p>
               <form action="#" method="POST" className="mt-4">
                 <div className="space-y-6">
@@ -184,13 +222,19 @@ function PaymentForm() {
                       className="inline-flex w-full items-center justify-center rounded-md border border-transparent bg-orange-500 px-4 py-4 text-base font-semibold text-white transition-all duration-200 hover:bg-orange-600 focus:bg-orange-600 focus:outline-none">
                       {loading ? "Processing.." : "Proceed With Payment"}
                     </button>
-                    ;
                   </div>
                 </div>
               </form>
             </div>
           </div>
         </div>
+      )}
+      {snackbar.show && (
+        <Snackbar
+          message={snackbar.message}
+          type={snackbar.type}
+          onClose={hideSnackbar}
+        />
       )}
     </>
   );
